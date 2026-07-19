@@ -4,13 +4,65 @@ on:
   schedule:
     # Every Thursday at 13:00 UTC. Cron day-of-week: 4 = Thursday.
     - cron: "0 13 * * 4"
-  workflow_dispatch: {} # lets you trigger it manually from the Actions tab
+  workflow_dispatch: {}
 
 permissions:
   contents: write
 
 jobs:
+  # Computes one shared timestamp used by every chunk, so the whole week's
+  # snapshot reflects the same instant rather than each chunk drifting as
+  # it starts at a slightly different time.
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      now_ms: ${{ steps.timestamp.outputs.now_ms }}
+    steps:
+      - id: timestamp
+        run: echo "now_ms=$(date +%s%3N)" >> "$GITHUB_OUTPUT"
+
+  # Runs 10 chunks of 500 wallets each IN PARALLEL. This is what turns a
+  # ~40 hour sequential job (which would blow past GitHub Actions' 6-hour
+  # per-job timeout) into ~10 jobs that each finish in a few hours,
+  # running concurrently.
+  #
+  # If your wallet list grows past 5000, add more chunk numbers to the
+  # matrix below (each covers indices [chunk*500, chunk*500+500)).
   check:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Fetch chunk ${{ matrix.chunk }}
+        env:
+          CHUNK_INDEX: ${{ matrix.chunk }}
+          CHUNK_SIZE: 500
+          NOW_MS: ${{ needs.prepare.outputs.now_ms }}
+        run: node scripts/fetch-mvp-chunk.js
+
+      - name: Upload chunk result
+        uses: actions/upload-artifact@v4
+        with:
+          name: mvp-chunk-${{ matrix.chunk }}
+          path: data/chunks/chunk-${{ matrix.chunk }}.json
+          retention-days: 3
+
+  # Waits for all 10 chunks, merges them into the final weekly snapshot,
+  # and commits the result. Only one job commits, so there's no risk of
+  # parallel jobs racing each other on the same push.
+  merge:
+    needs: [prepare, check]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
@@ -21,13 +73,22 @@ jobs:
         with:
           node-version: 20
 
-      - name: Run MVP spend check
-        run: node scripts/fetch-mvp.js
+      - name: Download all chunk results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mvp-chunk-*
+          path: data/chunks
+          merge-multiple: true
+
+      - name: Merge chunks into weekly snapshot
+        env:
+          NOW_MS: ${{ needs.prepare.outputs.now_ms }}
+        run: node scripts/merge-mvp-chunks.js
 
       - name: Commit and push results
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/
+          git add data/latest.json data/history/ data/manifest.json
           git diff --staged --quiet || git commit -m "Weekly MVP spend check: $(date -u +%Y-%m-%d)"
           git push
