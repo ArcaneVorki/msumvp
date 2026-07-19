@@ -1,0 +1,25 @@
+{
+  "date": "2026-07-16",
+  "checkedAt": "2026-07-19T00:41:00.181Z",
+  "nowMs": 1784421600000,
+  "totalWallets": 1,
+  "totalSpendNeso": "6629437819",
+  "rankCounts": {
+    "Inactive": 0,
+    "Bronze": 0,
+    "Silver": 0,
+    "Gold": 0,
+    "Diamond": 0,
+    "Black": 1
+  },
+  "errorCount": 0,
+  "results": [
+    {
+      "address": "0xCfA397cCF402cAedbd595F7dA8C39E8e919820EA",
+      "spendNeso": "6629437819",
+      "rank": "Black",
+      "windowLabel": "13-week MVP window",
+      "error": null
+    }
+  ]
+}

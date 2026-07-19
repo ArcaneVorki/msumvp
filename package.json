@@ -1,0 +1,10 @@
+{
+  "name": "msumvp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Weekly MVP spend tracker, cross-referencing wallets from the msuban repo",
+  "scripts": {
+    "check": "node scripts/fetch-mvp.js"
+  }
+}

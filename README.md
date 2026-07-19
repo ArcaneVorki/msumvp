@@ -1,0 +1,70 @@
+# MVP Spend Tracker (msumvp)
+
+Weekly tracker for wallet spending, using the same wallet list as the
+[msuban](https://github.com/ArcaneVorki/msuban) repo. Classifies each wallet
+into an MVP spend tier and tracks tier distribution + total spend over time.
+
+## How it works
+
+- Every Thursday at 13:00 UTC, a GitHub Action:
+  1. Pulls the current wallet list from `msuban`'s `data/addresses.json` (raw GitHub content — no auth needed, since it's a public repo)
+  2. For each wallet, calls `https://www.msuinsight.com/api/mvp/<address>/summary?nowMs=<current time>` — `nowMs` is recalculated fresh on every run
+  3. Reads `current.spendNeso` from the response and classifies it into a tier
+  4. Waits 1 second between each wallet before moving to the next
+- Results are written to `data/latest.json`, `data/history/<date>.json`, and `data/manifest.json`
+- `index.html` (served via GitHub Pages) reads that data, plus `msuban`'s `data/players.json` (for character names/images), and renders three tabs:
+  - **Rank Distribution** — how many wallets are in each tier, and how that's shifted week to week
+  - **Spending Ranking** — every tracked wallet, sorted highest to lowest spend
+  - **Total Spending** — total NESO spent across all wallets, both as a headline number and a trend line over time
+
+## Spend tier thresholds
+
+Based on `spendNeso` (raw NESO, not millions) — lower bound inclusive, upper bound exclusive:
+
+| Tier | Range |
+|---|---|
+| Inactive | < 3,000,000 |
+| Bronze | 3,000,000 – < 75,000,000 |
+| Silver | 75,000,000 – < 150,000,000 |
+| Gold | 150,000,000 – < 350,000,000 |
+| Diamond | 350,000,000 – < 700,000,000 |
+| Black | ≥ 700,000,000 |
+
+## Setup (one-time)
+
+1. Create the repo at `https://github.com/ArcaneVorki/msumvp` (empty, no README/gitignore added by GitHub)
+2. Push this folder to it, same as the msuban setup:
+   ```powershell
+   git init
+   git add .
+   git commit -m "Initial commit"
+   git branch -M main
+   git remote add origin https://github.com/ArcaneVorki/msumvp.git
+   git push -u origin main
+   ```
+3. **Enable GitHub Pages**: Settings → Pages → Source: Deploy from a branch → `main` / root
+4. **Enable Actions write permissions**: Settings → Actions → General → Workflow permissions → "Read and write permissions"
+5. Test it manually before waiting on the schedule: Actions tab → "Weekly MVP Spend Check" → Run workflow
+
+Your dashboard will be live at `https://arcanevorki.github.io/msumvp/`.
+
+## Dependency on msuban
+
+This repo reads two files from `msuban` at runtime — one from the Node script (server-side, during the Action), one from the browser (client-side, on page load):
+
+- `scripts/fetch-mvp.js` fetches `msuban`'s `data/addresses.json` to know which wallets to check
+- `index.html` fetches `msuban`'s `data/players.json` to show character names/images next to wallet addresses
+
+Both are public raw-GitHub-content URLs, so no cross-repo auth or secrets are needed — but it does mean:
+- If `msuban`'s repo name, owner, or file paths ever change, update the URLs in both files here to match
+- The wallet list `msumvp` checks is always whatever's currently in `msuban`'s `addresses.json` at the moment the weekly job runs — if you rebuild the top-5000 list in `msuban` right before a Thursday run, this tracker picks up the new list automatically
+
+## Runtime
+
+5000 wallets × 1 second delay ≈ 85 minutes per run. Well within GitHub Actions' free limits, but expect the workflow to show "in progress" for a while — that's expected.
+
+## Notes on the numbers
+
+- `spendNeso` is a large raw integer (not pre-divided into millions) — the dashboard formats it as "X.XXM NESO" for readability
+- The total spend sum is computed with BigInt in the fetch script to avoid floating-point precision loss across thousands of large values, then stored as a string
+- If a wallet's API call fails after 3 retries, it's recorded with `spendNeso: null` and excluded from the tier counts and total — check `errorCount` in `latest.json` if the total looks off
