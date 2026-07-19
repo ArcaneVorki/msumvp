@@ -6,23 +6,34 @@ into an MVP spend tier and tracks tier distribution + total spend over time.
 
 ## How it works
 
-Each wallet check is slow enough (the API itself, not just the 1-second delay) that
-checking all ~5000 wallets sequentially takes around **40 hours** — far past GitHub
-Actions' 6-hour per-job timeout. So the weekly check is split into **10 parallel chunks
-of 500 wallets each**, using a matrix strategy:
+Each wallet check is slow enough that checking all ~5000 wallets sequentially takes
+around **40 hours** — far past GitHub Actions' 6-hour per-job timeout. Running chunks
+**in parallel** was the first approach tried, but the API itself gets *slower* under
+concurrent load, so that makes things worse rather than better. Instead, this stays
+strictly **sequential** and spreads the work across multiple scheduled runs:
 
-1. A `prepare` job computes one shared timestamp (`nowMs`) used by every chunk, so the
-   whole week's snapshot reflects the same instant rather than each chunk drifting as it
-   starts at a slightly different time.
-2. A `check` job runs **10 copies in parallel** (matrix `chunk: [0..9]`), each one:
-   - Pulls the current wallet list from `msuban`'s `data/addresses.json`
-   - Slices out its 500-wallet portion (`chunk * 500` to `chunk * 500 + 500`)
-   - Calls `https://www.msuinsight.com/api/mvp/<address>/summary?nowMs=<shared timestamp>` for each wallet in its slice, waiting 1 second between each
-   - Reads `current.spendNeso` from the response, classifies it into a tier
-   - Uploads its results as a build artifact (not committed directly — see below)
-3. A `merge` job waits for all 10 chunks, downloads their artifacts, combines them into
-   one snapshot, and is the **only** job that commits to the repo — avoiding any race
-   condition from multiple parallel jobs trying to push at once.
+1. **Thursday 13:00 UTC** — if no cycle is currently in progress (and the last one
+   finished at least ~6 days ago), a new weekly cycle starts: the wallet list is pulled
+   fresh from `msuban`'s `data/addresses.json`, snapshotted, and one shared `nowMs`
+   timestamp is fixed for the whole cycle.
+2. **Every 6 hours after that** — a scheduled run checks whether a cycle is in progress.
+   If so, it resumes exactly where the last run left off (tracked in `data/progress.json`),
+   processing wallets one at a time (1 second between each, same as before) until either
+   the wallet list is exhausted or the run's own time budget (5.5 hours) is up — whichever
+   comes first. If it runs out of time, it checkpoints its position and stops cleanly; the
+   next 6-hourly run picks up from there.
+3. Once the full wallet list is processed, the run finalizes the cycle: merges everything
+   into `data/latest.json` / `data/history/<date>.json` / `data/manifest.json`, and marks
+   itself complete so subsequent 6-hourly runs no-op until the next Thursday's cycle is due.
+
+A `concurrency` group in the workflow ensures only one run executes at a time — if a
+6-hourly trigger fires while a previous run is still going, it queues instead of running
+in parallel, which matters here since two runs touching the checkpoint at once would
+corrupt it.
+
+At roughly 5.5 usable hours per run and ~40 hours of total work, a full cycle takes about
+7-8 of the 6-hourly runs to complete — call it 2 days from the Thursday start, comfortably
+finishing well before the next week's cycle is due.
 
 Results land in `data/latest.json`, `data/history/<date>.json`, and `data/manifest.json`.
 `index.html` (served via GitHub Pages) reads that data, plus `msuban`'s `data/players.json`
@@ -64,34 +75,36 @@ Your dashboard will be live at `https://arcanevorki.github.io/msumvp/`.
 
 ## Dependency on msuban
 
-This repo reads two files from `msuban` at runtime — one from the Node scripts (server-side, during the Action), one from the browser (client-side, on page load):
+This repo reads two files from `msuban` at runtime — one from the Node script (server-side, during the Action), one from the browser (client-side, on page load):
 
-- `scripts/fetch-mvp-chunk.js` fetches `msuban`'s `data/addresses.json` (each of the 10 parallel chunk jobs fetches the full list independently, then slices out its own portion)
+- `scripts/fetch-mvp-resumable.js` fetches `msuban`'s `data/addresses.json` once, at the start of each new cycle (not on every resumed run — the list is snapshotted into `data/progress-addresses.json` for the rest of that cycle, so a mid-cycle change to `msuban`'s list can't cause inconsistent results partway through)
 - `index.html` fetches `msuban`'s `data/players.json` to show character names/images next to wallet addresses
 
 Both are public raw-GitHub-content URLs, so no cross-repo auth or secrets are needed — but it does mean:
-- If `msuban`'s repo name, owner, or file paths ever change, update the URLs in `scripts/fetch-mvp-chunk.js` and `index.html` here to match
-- The wallet list `msumvp` checks is always whatever's currently in `msuban`'s `addresses.json` at the moment the weekly job runs — if you rebuild the top-5000 list in `msuban` right before a Thursday run, this tracker picks up the new list automatically
+- If `msuban`'s repo name, owner, or file paths ever change, update the URLs in `scripts/fetch-mvp-resumable.js` and `index.html` here to match
+- The wallet list `msumvp` checks is whatever's in `msuban`'s `addresses.json` at the moment each new cycle *starts* (Thursday) — not updated mid-cycle even if `msuban` changes during those 2 days
 
 ## Runtime
 
-Each wallet check apparently takes long enough that the full ~5000-wallet list would take
-around **40 hours** run sequentially — well past GitHub Actions' 6-hour per-job limit.
-Split into 10 parallel chunks of 500, each chunk instead takes roughly **4 hours**,
-comfortably inside that limit, and all 10 finish around the same time since they run
-concurrently. The `merge` job that follows is fast (just combining JSON files).
+A full cycle takes roughly **40 hours of actual API time**, spread across ~7-8 runs of
+the 6-hourly schedule (each using its 5.5-hour budget), finishing in about 2 days from
+the Thursday start. This is intentionally paced and sequential — don't try to speed it up
+with parallel jobs, since the API gets slower under concurrent load rather than handling
+it well.
 
-If your GitHub plan or repo settings limit how many jobs can run concurrently, the chunks
-may queue instead of all starting immediately — check the Actions tab if a run seems to be
-taking longer than expected. If wallets keep timing out or the API pushes back under this
-much parallel load, consider fewer concurrent chunks (e.g. lower `max-parallel` in the
-workflow's `strategy` block) at the cost of a longer total run.
+You can watch progress mid-cycle by checking `data/progress.json` — `nextIndex` tells you
+how far through the wallet list the current cycle has gotten.
+
+If you ever need to check status or force things along, `workflow_dispatch` (the "Run
+workflow" button in the Actions tab) works the same as a scheduled trigger — it'll either
+resume an in-progress cycle or no-op if one just finished, same logic either way.
 
 ## Notes on the numbers
 
-- `scripts/fetch-mvp.js` (the original single-run script) is no longer used by the
-  workflow — it's kept only if you want to run a full check manually/locally against a
-  small test list. The scheduled workflow uses `fetch-mvp-chunk.js` + `merge-mvp-chunks.js`.
+- `scripts/fetch-mvp.js` (the very first version of this tracker, before chunking) is no
+  longer used by the workflow — harmless to delete, kept around only for reference.
 - `spendNeso` is a large raw integer (not pre-divided into millions) — the dashboard formats it as "X.XXM NESO" for readability
-- The total spend sum is computed with BigInt in the merge script to avoid floating-point precision loss across thousands of large values, then stored as a string
+- The total spend sum is computed with BigInt in the finalize step to avoid floating-point precision loss across thousands of large values, then stored as a string
 - If a wallet's API call fails after 3 retries, it's recorded with `spendNeso: null` and excluded from the tier counts and total — check `errorCount` in `latest.json` if the total looks off
+- `data/progress.json` persists even after a cycle completes (it's how the next Thursday's
+  trigger knows whether a new cycle is actually due) — this is expected, not a leftover to clean up
