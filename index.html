@@ -103,6 +103,21 @@
   }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
+
+  .tier-filter-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+  .tier-filter-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 5px 12px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    cursor: pointer;
+  }
+  .tier-filter-btn.active { border-color: var(--accent); color: var(--text); background: rgba(99,102,241,0.12); }
 </style>
 </head>
 <body>
@@ -127,6 +142,7 @@
 <div class="tab-panel" id="spendingPanel">
   <div class="panel">
     <h2>Spending ranking (highest to lowest)</h2>
+    <div class="tier-filter-bar" id="tierFilterBar"></div>
     <div id="spendingTableWrap"></div>
   </div>
 </div>
@@ -195,6 +211,73 @@ function avatarHtmlFor(player) {
     return `<div class="char-avatar-frame"><div class="placeholder">?</div></div>`;
   }
   return `<div class="char-avatar-frame"><img src="${player.imageUrl}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.innerHTML='<div class=&quot;placeholder&quot;>?</div>'" /></div>`;
+}
+
+// Cached across renders so the tier filter buttons can re-render without re-fetching
+let cachedRankedResults = [];
+let cachedWalletToPlayer = {};
+let activeTierFilter = "All";
+
+const TIER_FILTER_OPTIONS = ["All", "Black", "Diamond", "Gold", "Silver", "Bronze", "Inactive"];
+
+function renderTierFilterBar() {
+  document.getElementById("tierFilterBar").innerHTML = TIER_FILTER_OPTIONS.map(t => `
+    <button class="tier-filter-btn ${t === activeTierFilter ? "active" : ""}" onclick="setTierFilter('${t}')">${t}</button>
+  `).join("");
+}
+
+function setTierFilter(tier) {
+  activeTierFilter = tier;
+  renderTierFilterBar();
+  renderSpendingTable();
+}
+
+function renderSpendingTable() {
+  const filtered = activeTierFilter === "All"
+    ? cachedRankedResults
+    : cachedRankedResults.filter(r => r.rank === activeTierFilter);
+
+  if (filtered.length === 0) {
+    document.getElementById("spendingTableWrap").innerHTML =
+      `<div class="empty">No wallets in this tier.</div>`;
+    return;
+  }
+
+  const rows = filtered.map((r, i) => {
+    const player = cachedWalletToPlayer[r.address];
+    const charCell = player
+      ? `
+        <a class="char-link" href="${charPageUrl(player.characterAssetKey)}" target="_blank" rel="noopener noreferrer">
+          <div class="char-cell">
+            ${avatarHtmlFor(player)}
+            <div>
+              <div class="char-name">${escapeHtml(player.characterName || "Unknown")}</div>
+              <div class="char-extra">Rank #${player.rank ?? "—"}</div>
+            </div>
+          </div>
+        </a>
+      `
+      : `<span class="char-extra">No character match</span>`;
+
+    return `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${charCell}</td>
+        <td class="mono">${r.address}</td>
+        <td><span class="rank-pill rank-${r.rank}">${r.rank}</span></td>
+        <td>${formatNeso(r.spendNeso)}</td>
+      </tr>
+    `;
+  }).join("");
+
+  document.getElementById("spendingTableWrap").innerHTML = `
+    <table>
+      <thead>
+        <tr><th>#</th><th>Character</th><th>Address</th><th>Tier</th><th>Spend (last 13 weeks)</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
 }
 
 async function main() {
@@ -291,46 +374,10 @@ async function main() {
     .slice()
     .sort((a, b) => Number(BigInt(b.spendNeso) - BigInt(a.spendNeso)));
 
-  if (rankedResults.length === 0) {
-    document.getElementById("spendingTableWrap").innerHTML =
-      `<div class="empty">No spending data yet.</div>`;
-  } else {
-    const rows = rankedResults.map((r, i) => {
-      const player = walletToPlayer[r.address];
-      const charCell = player
-        ? `
-          <a class="char-link" href="${charPageUrl(player.characterAssetKey)}" target="_blank" rel="noopener noreferrer">
-            <div class="char-cell">
-              ${avatarHtmlFor(player)}
-              <div>
-                <div class="char-name">${escapeHtml(player.characterName || "Unknown")}</div>
-                <div class="char-extra">Rank #${player.rank ?? "—"}</div>
-              </div>
-            </div>
-          </a>
-        `
-        : `<span class="char-extra">No character match</span>`;
-
-      return `
-        <tr>
-          <td>${i + 1}</td>
-          <td>${charCell}</td>
-          <td class="mono">${r.address}</td>
-          <td><span class="rank-pill rank-${r.rank}">${r.rank}</span></td>
-          <td>${formatNeso(r.spendNeso)}</td>
-        </tr>
-      `;
-    }).join("");
-
-    document.getElementById("spendingTableWrap").innerHTML = `
-      <table>
-        <thead>
-          <tr><th>#</th><th>Character</th><th>Address</th><th>Tier</th><th>Spend (last 13 weeks)</th></tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    `;
-  }
+  cachedRankedResults = rankedResults;
+  cachedWalletToPlayer = walletToPlayer;
+  renderTierFilterBar();
+  renderSpendingTable();
 
   // ===================== TAB 3: TOTAL SPENDING =====================
   document.getElementById("totalCards").innerHTML = `
