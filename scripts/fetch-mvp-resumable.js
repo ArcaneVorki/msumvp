@@ -205,6 +205,8 @@ async function main() {
         spendNeso,
         rank: classifyRank(spendNeso),
         windowLabel: data?.window?.label || null,
+        maintenancePlan: data?.maintenancePlan ?? null,
+        spendBuckets: data?.spendBuckets ?? null,
         error: null,
       });
     } catch (err) {
