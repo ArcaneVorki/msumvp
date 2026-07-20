@@ -25,7 +25,9 @@
     padding: 24px;
   }
   h1 { font-size: 20px; margin: 0 0 4px; }
-  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 4px; }
+  .info-note { color: var(--muted); font-size: 12px; margin: 0 0 4px; }
+  .info-note:last-of-type { margin-bottom: 24px; }
   .cards {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -118,12 +120,28 @@
     cursor: pointer;
   }
   .tier-filter-btn.active { border-color: var(--accent); color: var(--text); background: rgba(99,102,241,0.12); }
+
+  .search-input {
+    width: 100%;
+    max-width: 420px;
+    background: #0f1115;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 12px;
+  }
+  .search-input:focus { outline: none; border-color: var(--accent); }
+  .search-input::placeholder { color: var(--muted); }
 </style>
 </head>
 <body>
 
 <h1>MVP Spend Tracker</h1>
 <div class="subtitle" id="subtitle">Loading data…</div>
+<div class="info-note">Data refresh every Saturday. 100k Neso = 1 NXPC = 1 Point.</div>
+<div class="info-note">Marketplace sell not counted - Buys only count 5%</div>
 
 <div class="tab-bar">
   <button class="tab-btn active" id="tabRankBtn" onclick="switchTab('rank')">Rank Distribution</button>
@@ -142,6 +160,7 @@
 <div class="tab-panel" id="spendingPanel">
   <div class="panel">
     <h2>Spending ranking (highest to lowest)</h2>
+    <input type="text" id="spendingSearchInput" class="search-input" placeholder="Search by address or character name..." oninput="setSpendingSearch(this.value)" />
     <div class="tier-filter-bar" id="tierFilterBar"></div>
     <div id="spendingTableWrap"></div>
   </div>
@@ -149,6 +168,10 @@
 
 <div class="tab-panel" id="totalPanel">
   <div class="cards" id="totalCards"></div>
+  <div class="panel">
+    <h2>Spend by tier (this week)</h2>
+    <div class="cards" id="tierSpendCards"></div>
+  </div>
   <div class="panel">
     <h2>Total NESO spent (last 13 weeks) — trend</h2>
     <canvas id="totalChart"></canvas>
@@ -216,9 +239,10 @@ function avatarHtmlFor(player) {
 // Cached across renders so the tier filter buttons can re-render without re-fetching
 let cachedRankedResults = [];
 let cachedWalletToPlayer = {};
-let activeTierFilter = "All";
+let activeTierFilter = "Black";
+let activeSpendingSearch = "";
 
-const TIER_FILTER_OPTIONS = ["All", "Black", "Diamond", "Gold", "Silver", "Bronze", "Inactive"];
+const TIER_FILTER_OPTIONS = ["Black", "Diamond", "Gold", "Silver", "Bronze", "Inactive", "All"];
 
 function renderTierFilterBar() {
   document.getElementById("tierFilterBar").innerHTML = TIER_FILTER_OPTIONS.map(t => `
@@ -232,14 +256,28 @@ function setTierFilter(tier) {
   renderSpendingTable();
 }
 
+function setSpendingSearch(value) {
+  activeSpendingSearch = value.trim().toLowerCase();
+  renderSpendingTable();
+}
+
 function renderSpendingTable() {
-  const filtered = activeTierFilter === "All"
+  let filtered = activeTierFilter === "All"
     ? cachedRankedResults
     : cachedRankedResults.filter(r => r.rank === activeTierFilter);
 
+  if (activeSpendingSearch) {
+    filtered = filtered.filter(r => {
+      const player = cachedWalletToPlayer[r.address];
+      const addrMatch = r.address.toLowerCase().includes(activeSpendingSearch);
+      const nameMatch = player?.characterName?.toLowerCase().includes(activeSpendingSearch);
+      return addrMatch || nameMatch;
+    });
+  }
+
   if (filtered.length === 0) {
     document.getElementById("spendingTableWrap").innerHTML =
-      `<div class="empty">No wallets in this tier.</div>`;
+      `<div class="empty">No wallets match this filter.</div>`;
     return;
   }
 
@@ -259,11 +297,14 @@ function renderSpendingTable() {
       `
       : `<span class="char-extra">No character match</span>`;
 
+    const combatPower = player?.attackPower ? formatNumber(player.attackPower) : "—";
+
     return `
       <tr>
         <td>${i + 1}</td>
         <td>${charCell}</td>
         <td class="mono">${r.address}</td>
+        <td>${combatPower}</td>
         <td><span class="rank-pill rank-${r.rank}">${r.rank}</span></td>
         <td>${formatNeso(r.spendNeso)}</td>
       </tr>
@@ -273,7 +314,7 @@ function renderSpendingTable() {
   document.getElementById("spendingTableWrap").innerHTML = `
     <table>
       <thead>
-        <tr><th>#</th><th>Character</th><th>Address</th><th>Tier</th><th>Spend (last 13 weeks)</th></tr>
+        <tr><th>#</th><th>Character</th><th>Address</th><th>Combat Power</th><th>Tier</th><th>Spend (last 13 weeks)</th></tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>
@@ -390,6 +431,24 @@ async function main() {
       <div class="value">${formatNumber(latest.totalSpendNeso)}</div>
     </div>
   `;
+
+  // Spend broken down by tier, this week
+  const tierTotals = { Black: 0n, Diamond: 0n, Gold: 0n, Silver: 0n, Bronze: 0n, Inactive: 0n };
+  for (const r of (latest.results || [])) {
+    if (r.rank && r.spendNeso != null) {
+      try {
+        tierTotals[r.rank] += BigInt(r.spendNeso);
+      } catch {
+        // malformed spendNeso — skip
+      }
+    }
+  }
+  document.getElementById("tierSpendCards").innerHTML = rankOrder.map(r => `
+    <div class="card">
+      <div class="label"><span class="rank-pill rank-${r}">${r}</span></div>
+      <div class="value">${formatNeso(tierTotals[r].toString())}</div>
+    </div>
+  `).join("");
 
   const totalLabels = [];
   const totalSeries = [];
