@@ -288,7 +288,14 @@ function formatNeso(val) {
   const n = Number(val);
   if (Number.isNaN(n)) return String(val);
   const millions = n / 1_000_000;
-  return `${millions.toLocaleString(undefined, { maximumFractionDigits: 2 })}M NESO`;
+  const opts = { maximumFractionDigits: 3 };
+  if (millions >= 1_000_000) {
+    return `${(millions / 1_000_000).toLocaleString(undefined, opts)}T NESO`;
+  }
+  if (millions >= 1000) {
+    return `${(millions / 1000).toLocaleString(undefined, opts)}B NESO`;
+  }
+  return `${millions.toLocaleString(undefined, opts)}M NESO`;
 }
 
 function charPageUrl(characterAssetKey) {
