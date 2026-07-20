@@ -182,9 +182,29 @@
   .modal-close-btn:hover { color: var(--text); }
   .modal-section-title { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; margin: 16px 0 8px; }
   .modal-section-title:first-of-type { margin-top: 0; }
+
+  .top-nav { display: flex; gap: 8px; margin-bottom: 16px; }
+  .top-nav-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 7px 16px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    text-decoration: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+  .top-nav-btn.active { border-color: var(--accent); color: #c7c9ff; background: rgba(99,102,241,0.12); }
+  .top-nav-btn:not(.active):hover { color: var(--text); border-color: var(--accent); }
 </style>
 </head>
 <body>
+
+<div class="top-nav">
+  <a class="top-nav-btn" href="https://arcanevorki.github.io/msuban/">Ban Tracker</a>
+  <span class="top-nav-btn active">MVP Dashboard</span>
+</div>
 
 <h1>MVP Spend Tracker</h1>
 <div class="subtitle" id="subtitle">Loading data…</div>
