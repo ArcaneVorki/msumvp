@@ -169,8 +169,12 @@
 <div class="tab-panel" id="totalPanel">
   <div class="cards" id="totalCards"></div>
   <div class="panel">
-    <h2>Spend by tier (this week)</h2>
+    <h2>Spend by tier (last 13 weeks)</h2>
     <div class="cards" id="tierSpendCards"></div>
+  </div>
+  <div class="panel">
+    <h2>Spend by tier over time</h2>
+    <canvas id="tierSpendChart"></canvas>
   </div>
   <div class="panel">
     <h2>Total NESO spent (last 13 weeks) — trend</h2>
@@ -421,6 +425,20 @@ async function main() {
   renderSpendingTable();
 
   // ===================== TAB 3: TOTAL SPENDING =====================
+  function sumTopN(results, n) {
+    const sorted = (results || [])
+      .filter(r => r.spendNeso != null)
+      .slice()
+      .sort((a, b) => Number(BigInt(b.spendNeso) - BigInt(a.spendNeso)));
+    let sum = 0n;
+    for (const r of sorted.slice(0, n)) {
+      try { sum += BigInt(r.spendNeso); } catch {}
+    }
+    return sum;
+  }
+
+  const top10Leviathans = sumTopN(latest.results, 10);
+
   document.getElementById("totalCards").innerHTML = `
     <div class="card big">
       <div class="label">Total NESO spent (last 13 weeks)</div>
@@ -429,6 +447,10 @@ async function main() {
     <div class="card">
       <div class="label">Raw total (NESO)</div>
       <div class="value">${formatNumber(latest.totalSpendNeso)}</div>
+    </div>
+    <div class="card">
+      <div class="label">Top 10 Leviathans (combined)</div>
+      <div class="value">${formatNeso(top10Leviathans.toString())}</div>
     </div>
   `;
 
@@ -449,6 +471,67 @@ async function main() {
       <div class="value">${formatNeso(tierTotals[r].toString())}</div>
     </div>
   `).join("");
+
+  // Spend by tier over time — reuses the same histRecords/histDates fetched for Tab 1
+  const tierSpendLabels = [];
+  const tierSpendSeries = { Black: [], Diamond: [], Gold: [], Silver: [], Bronze: [], Inactive: [] };
+  const top10Series = [];
+  histRecords.forEach((rec, i) => {
+    if (!rec) return;
+    tierSpendLabels.push(histDates[i]);
+    const weekTotals = { Black: 0n, Diamond: 0n, Gold: 0n, Silver: 0n, Bronze: 0n, Inactive: 0n };
+    for (const r of (rec.results || [])) {
+      if (r.rank && r.spendNeso != null) {
+        try { weekTotals[r.rank] += BigInt(r.spendNeso); } catch {}
+      }
+    }
+    for (const r of rankOrder) {
+      tierSpendSeries[r].push(Number(weekTotals[r]) / 1_000_000); // in millions for chart readability
+    }
+    top10Series.push(Number(sumTopN(rec.results, 10)) / 1_000_000);
+  });
+
+  try {
+    new Chart(document.getElementById("tierSpendChart"), {
+      type: "line",
+      data: {
+        labels: tierSpendLabels,
+        datasets: [
+          ...rankOrder.map(r => ({
+            label: r,
+            data: tierSpendSeries[r],
+            borderColor: rankColors[r],
+            backgroundColor: rankColors[r] + "22",
+            tension: 0.25,
+            fill: false,
+          })),
+          {
+            label: "Top 10 Leviathans",
+            data: top10Series,
+            borderColor: "#ec4899",
+            backgroundColor: "#ec489922",
+            borderDash: [6, 4],
+            tension: 0.25,
+            fill: false,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: "#e6e8ec" } } },
+        scales: {
+          x: { ticks: { color: "#9aa1ad" }, grid: { color: "#262a33" } },
+          y: {
+            ticks: { color: "#9aa1ad" }, grid: { color: "#262a33" }, beginAtZero: true,
+            title: { display: true, text: "Millions of NESO", color: "#9aa1ad" },
+          },
+        },
+      },
+    });
+  } catch (err) {
+    console.error("Tier spend chart failed:", err);
+    document.getElementById("tierSpendChart").outerHTML = `<div class="empty">Chart failed to render: ${err.message}</div>`;
+  }
 
   const totalLabels = [];
   const totalSeries = [];
