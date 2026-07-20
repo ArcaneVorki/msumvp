@@ -173,12 +173,8 @@
     <div class="cards" id="tierSpendCards"></div>
   </div>
   <div class="panel">
-    <h2>Spend by tier over time</h2>
+    <h2>Total NESO spent (last 13 weeks)</h2>
     <canvas id="tierSpendChart"></canvas>
-  </div>
-  <div class="panel">
-    <h2>Total NESO spent (last 13 weeks) — trend</h2>
-    <canvas id="totalChart"></canvas>
   </div>
 </div>
 
@@ -470,12 +466,20 @@ async function main() {
       <div class="label"><span class="rank-pill rank-${r}">${r}</span></div>
       <div class="value">${formatNeso(tierTotals[r].toString())}</div>
     </div>
-  `).join("");
+  `).join("") + `
+    <div class="card">
+      <div class="label">Top 10 Leviathans</div>
+      <div class="value">${formatNeso(top10Leviathans.toString())}</div>
+    </div>
+  `;
 
-  // Spend by tier over time — reuses the same histRecords/histDates fetched for Tab 1
+  // Spend by tier over time, plus overall total and Top 10 Leviathans —
+  // all combined into one chart. Reuses the same histRecords/histDates
+  // fetched for Tab 1.
   const tierSpendLabels = [];
   const tierSpendSeries = { Black: [], Diamond: [], Gold: [], Silver: [], Bronze: [], Inactive: [] };
   const top10Series = [];
+  const totalSeries = [];
   histRecords.forEach((rec, i) => {
     if (!rec) return;
     tierSpendLabels.push(histDates[i]);
@@ -489,6 +493,7 @@ async function main() {
       tierSpendSeries[r].push(Number(weekTotals[r]) / 1_000_000); // in millions for chart readability
     }
     top10Series.push(Number(sumTopN(rec.results, 10)) / 1_000_000);
+    totalSeries.push(Number(rec.totalSpendNeso || 0) / 1_000_000);
   });
 
   try {
@@ -497,6 +502,15 @@ async function main() {
       data: {
         labels: tierSpendLabels,
         datasets: [
+          {
+            label: "Total spend",
+            data: totalSeries,
+            borderColor: "#22c55e",
+            backgroundColor: "rgba(34,197,94,0.12)",
+            borderWidth: 3,
+            tension: 0.25,
+            fill: true,
+          },
           ...rankOrder.map(r => ({
             label: r,
             data: tierSpendSeries[r],
@@ -529,44 +543,8 @@ async function main() {
       },
     });
   } catch (err) {
-    console.error("Tier spend chart failed:", err);
+    console.error("Combined spend chart failed:", err);
     document.getElementById("tierSpendChart").outerHTML = `<div class="empty">Chart failed to render: ${err.message}</div>`;
-  }
-
-  const totalLabels = [];
-  const totalSeries = [];
-  histRecords.forEach((rec, i) => {
-    if (!rec) return;
-    totalLabels.push(histDates[i]);
-    totalSeries.push(Number(rec.totalSpendNeso || 0) / 1_000_000); // in millions for chart readability
-  });
-
-  try {
-    new Chart(document.getElementById("totalChart"), {
-      type: "line",
-      data: {
-        labels: totalLabels,
-        datasets: [{
-          label: "Total spend (millions of NESO)",
-          data: totalSeries,
-          borderColor: "#22c55e",
-          backgroundColor: "rgba(34,197,94,0.1)",
-          tension: 0.25,
-          fill: true,
-        }],
-      },
-      options: {
-        responsive: true,
-        plugins: { legend: { labels: { color: "#e6e8ec" } } },
-        scales: {
-          x: { ticks: { color: "#9aa1ad" }, grid: { color: "#262a33" } },
-          y: { ticks: { color: "#9aa1ad" }, grid: { color: "#262a33" }, beginAtZero: true },
-        },
-      },
-    });
-  } catch (err) {
-    console.error("Total spend chart failed:", err);
-    document.getElementById("totalChart").outerHTML = `<div class="empty">Chart failed to render: ${err.message}</div>`;
   }
 }
 
