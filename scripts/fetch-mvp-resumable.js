@@ -1,12 +1,15 @@
 // Resumable weekly MVP spend check.
 //
-// The wallet list is too large to check sequentially within a single GitHub
-// Actions job (6-hour limit) — a full pass takes roughly 40 hours. And the
-// API gets slower under concurrent load, so parallel chunks (matrix jobs)
-// make things WORSE, not better. Instead, this script processes wallets
-// strictly one at a time, checkpointing its position to disk periodically.
-// If the run's time budget runs out, it saves where it stopped and exits
-// cleanly — the next scheduled run picks up exactly where it left off.
+// Each wallet requires TWO API calls now (msuinsight spend summary, then
+// msu.io inventory summary for totalClaimNesoAmount), each 1 second apart,
+// so a full pass takes roughly 80 hours — double the original ~40 hours from
+// before the second call was added. Still far past GitHub Actions' 6-hour
+// job limit, and the API gets slower under concurrent load, so parallel
+// chunks (matrix jobs) make things WORSE, not better. Instead, this script
+// processes wallets strictly one at a time, checkpointing its position to
+// disk periodically. If the run's time budget runs out, it saves where it
+// stopped and exits cleanly — the next scheduled run picks up exactly where
+// it left off.
 //
 // State lives in three files (all under data/, all committed to the repo):
 //   data/progress.json          - cycle metadata: nowMs, nextIndex, completed, etc.
@@ -27,6 +30,7 @@ import path from "path";
 const ADDRESSES_URL =
   "https://raw.githubusercontent.com/ArcaneVorki/msuban/main/data/addresses.json";
 const API_BASE = "https://www.msuinsight.com/api/mvp";
+const INVENTORY_API_BASE = "https://msu.io/navigator/api/navigator/inventory";
 const DELAY_MS = 1000; // 1 second between each API call
 const MAX_RETRIES = 3;
 
@@ -200,6 +204,20 @@ async function main() {
     try {
       const data = await fetchJSON(url);
       const spendNeso = data?.current?.spendNeso ?? "0";
+
+      // Second API call for this wallet — note this one uses the ORIGINAL
+      // (checksummed) address casing, not lowercased, unlike the msuinsight
+      // call above.
+      await sleep(DELAY_MS);
+      let totalClaimNesoAmount = null;
+      try {
+        const invUrl = `${INVENTORY_API_BASE}/${original}/summary-v2`;
+        const invData = await fetchJSON(invUrl);
+        totalClaimNesoAmount = invData?.msuStatistics?.actionSummary?.totalClaimNesoAmount ?? null;
+      } catch (invErr) {
+        console.error(`  ${original} inventory summary failed: ${invErr.message}`);
+      }
+
       results.push({
         address: original,
         spendNeso,
@@ -207,6 +225,7 @@ async function main() {
         windowLabel: data?.window?.label || null,
         maintenancePlan: data?.maintenancePlan ?? null,
         spendBuckets: data?.spendBuckets ?? null,
+        totalClaimNesoAmount,
         error: null,
       });
     } catch (err) {
@@ -215,6 +234,7 @@ async function main() {
         address: original,
         spendNeso: null,
         rank: null,
+        totalClaimNesoAmount: null,
         error: err.message,
       });
     }
