@@ -913,8 +913,13 @@ async function main() {
           const mintedRaw = cachedMintedByAddress.get(r.address) ?? 0n;
           let spendRaw = 0n;
           try { spendRaw = BigInt(r.spendNeso); } catch {}
+          // mintedRaw has 18 on-chain decimals (like totalClaimNesoAmount
+          // elsewhere) and needs /1e18 to become actual NESO. spendRaw is
+          // already actual whole NESO — formatNeso's own /1e6 is purely a
+          // "millions" display grouping, not a unit conversion — so it's
+          // used here as-is.
           const mintedNeso = Number(mintedRaw) / 1e18;
-          const spendNesoAmount = Number(spendRaw) / 1e6;
+          const spendNesoAmount = Number(spendRaw);
           const ratio = spendNesoAmount > 0 ? mintedNeso / spendNesoAmount : null;
           return { ...r, mintedRaw, ratio };
         })
