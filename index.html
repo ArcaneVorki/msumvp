@@ -870,7 +870,11 @@ async function main() {
   const mintedSeries = { Black: [], Diamond: [], Gold: [], Silver: [], Bronze: [], Inactive: [] };
   const mintedTop10Series = [];
   const mintedTotalSeries = [];
-  for (let i = 1; i < histRecords.length; i++) {
+  // The very first weekly delta (i = 1) is computed against histRecords[0],
+  // which predates full tracking and has little/no claim data to subtract
+  // from — so that first point is artificially inflated. Skip it here so
+  // it never enters the chart; start charting from the second delta on.
+  for (let i = 2; i < histRecords.length; i++) {
     const weekly = computeWeeklyMinted(histRecords[i], histRecords[i - 1]);
     if (!weekly) continue;
     mintedLabels.push(histDates[i]);
