@@ -215,6 +215,7 @@
   <button class="tab-btn active" id="tabRankBtn" onclick="switchTab('rank')">Rank Distribution</button>
   <button class="tab-btn" id="tabSpendingBtn" onclick="switchTab('spending')">Spending Ranking</button>
   <button class="tab-btn" id="tabTotalBtn" onclick="switchTab('total')">Total Spending</button>
+  <button class="tab-btn" id="tabMintedBtn" onclick="switchTab('minted')">Weekly Minted</button>
 </div>
 
 <div class="tab-panel active" id="rankPanel">
@@ -243,6 +244,14 @@
   <div class="panel">
     <h2>Total NESO spent (last 13 weeks)</h2>
     <canvas id="tierSpendChart"></canvas>
+  </div>
+</div>
+
+<div class="tab-panel" id="mintedPanel">
+  <div class="cards" id="mintedCards"></div>
+  <div class="panel">
+    <h2>Weekly minted NESO by tier</h2>
+    <div class="cards" id="tierMintedCards"></div>
   </div>
 </div>
 
@@ -385,6 +394,7 @@ function switchTab(tab) {
     rank: { btn: "tabRankBtn", panel: "rankPanel" },
     spending: { btn: "tabSpendingBtn", panel: "spendingPanel" },
     total: { btn: "tabTotalBtn", panel: "totalPanel" },
+    minted: { btn: "tabMintedBtn", panel: "mintedPanel" },
   };
   for (const key in tabs) {
     document.getElementById(tabs[key].btn).classList.toggle("active", key === tab);
@@ -718,6 +728,102 @@ async function main() {
   } catch (err) {
     console.error("Combined spend chart failed:", err);
     document.getElementById("tierSpendChart").outerHTML = `<div class="empty">Chart failed to render: ${err.message}</div>`;
+  }
+
+  // ===================== TAB 4: WEEKLY MINTED NESO =====================
+  // totalClaimNesoAmount is stored on-chain style with 18 decimals (like wei)
+  // and is a running cumulative total per wallet. Weekly minted = this
+  // week's per-wallet total minus last week's per-wallet total, matched by
+  // address (new wallets count their full current total; wallets that
+  // disappeared from this week's list drop out of the total, same as every
+  // other tab here). Reuses histRecords/histDates already fetched for Tab 1,
+  // so this needs no extra network requests.
+
+  // Removes the 18 decimals (divides by 10^18) and formats the result as a
+  // human-readable NESO amount, e.g. 60453200941757916000n -> "60,453,200,941.7579"
+  function formatTokenAmount(rawBigInt, decimals = 18, maxFractionDigits = 4) {
+    const negative = rawBigInt < 0n;
+    const abs = negative ? -rawBigInt : rawBigInt;
+    const divisor = 10n ** BigInt(decimals);
+    const whole = abs / divisor;
+    const remainder = abs % divisor;
+    const fracFull = remainder.toString().padStart(decimals, "0");
+    const fracTrimmed = fracFull.slice(0, maxFractionDigits).replace(/0+$/, "");
+    const str = fracTrimmed ? `${whole.toLocaleString()}.${fracTrimmed}` : whole.toLocaleString();
+    return negative ? `-${str}` : str;
+  }
+
+  const claimDateIdx = histDates.indexOf(latest.date);
+  const prevClaimDate = claimDateIdx > 0 ? histDates[claimDateIdx - 1] : null;
+  const prevClaimRecord = claimDateIdx > 0 ? histRecords[claimDateIdx - 1] : null;
+
+  if (prevClaimRecord) {
+    const prevClaimMap = new Map();
+    for (const r of (prevClaimRecord.results || [])) {
+      if (r && r.address && r.totalClaimNesoAmount) {
+        try { prevClaimMap.set(r.address, BigInt(r.totalClaimNesoAmount)); } catch {}
+      }
+    }
+
+    // Per-wallet delta, bucketed by this week's rank so the tier cards sum
+    // exactly to the headline total.
+    const tierMintedTotals = { Black: 0n, Diamond: 0n, Gold: 0n, Silver: 0n, Bronze: 0n, Inactive: 0n };
+    const mintedByAddress = new Map();
+    let totalMintedRaw = 0n;
+    for (const r of (latest.results || [])) {
+      if (!r || !r.address || !r.totalClaimNesoAmount) continue;
+      let cur;
+      try { cur = BigInt(r.totalClaimNesoAmount); } catch { continue; }
+      const prev = prevClaimMap.get(r.address) || 0n;
+      const delta = cur - prev;
+      mintedByAddress.set(r.address, delta);
+      totalMintedRaw += delta;
+      if (r.rank && tierMintedTotals[r.rank] != null) tierMintedTotals[r.rank] += delta;
+    }
+
+    // Same Top 10 Leviathans (top 10 by spendNeso) used in the Total Spending tab
+    const top10Addresses = (latest.results || [])
+      .filter(r => r.spendNeso != null)
+      .slice()
+      .sort((a, b) => Number(BigInt(b.spendNeso) - BigInt(a.spendNeso)))
+      .slice(0, 10);
+    let top10MintedRaw = 0n;
+    for (const r of top10Addresses) {
+      top10MintedRaw += mintedByAddress.get(r.address) || 0n;
+    }
+
+    document.getElementById("mintedCards").innerHTML = `
+      <div class="card big">
+        <div class="label">Weekly Minted NESO (${prevClaimDate} → ${latest.date})</div>
+        <div class="value">${formatTokenAmount(totalMintedRaw)}</div>
+      </div>
+      <div class="card">
+        <div class="label">Top 10 Leviathans (combined)</div>
+        <div class="value">${formatTokenAmount(top10MintedRaw)}</div>
+      </div>
+    `;
+
+    document.getElementById("tierMintedCards").innerHTML = rankOrder.map(r => `
+      <div class="card">
+        <div class="label"><span class="rank-pill rank-${r}">${r}</span></div>
+        <div class="value">${formatTokenAmount(tierMintedTotals[r])}</div>
+      </div>
+    `).join("") + `
+      <div class="card">
+        <div class="label">Top 10 Leviathans</div>
+        <div class="value">${formatTokenAmount(top10MintedRaw)}</div>
+      </div>
+    `;
+  } else {
+    document.getElementById("mintedCards").innerHTML = `
+      <div class="card big">
+        <div class="label">Weekly Minted NESO</div>
+        <div class="value">—</div>
+        <div class="char-extra">No prior week data available for comparison</div>
+      </div>
+    `;
+    document.getElementById("tierMintedCards").innerHTML =
+      `<div class="empty">No prior week data available.</div>`;
   }
 }
 
