@@ -253,6 +253,10 @@
     <h2>Weekly minted NESO by tier</h2>
     <div class="cards" id="tierMintedCards"></div>
   </div>
+  <div class="panel">
+    <h2>Weekly minted NESO (all tracked weeks)</h2>
+    <canvas id="mintedChart"></canvas>
+  </div>
 </div>
 
 <div class="modal-overlay" id="detailsModalOverlay" onclick="if(event.target===this) closeWalletDetails()">
@@ -305,6 +309,71 @@ function formatNeso(val) {
     return `${(millions / 1000).toLocaleString(undefined, opts)}B NESO`;
   }
   return `${millions.toLocaleString(undefined, opts)}M NESO`;
+}
+
+// Same K/M/B/T scaling style as formatNeso (1B once > 1000M, 1M once >
+// 1000K, etc.), but for values already expressed in whole NESO units —
+// e.g. a claim/mint amount after its 18 on-chain decimals have been
+// removed — rather than a raw spendNeso integer that still needs /1e6.
+function formatNesoAmount(n) {
+  if (n == null || Number.isNaN(n)) return "—";
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  const opts = { maximumFractionDigits: 3 };
+  if (abs >= 1_000_000_000_000) return `${sign}${(abs / 1_000_000_000_000).toLocaleString(undefined, opts)}T NESO`;
+  if (abs >= 1_000_000_000) return `${sign}${(abs / 1_000_000_000).toLocaleString(undefined, opts)}B NESO`;
+  if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toLocaleString(undefined, opts)}M NESO`;
+  if (abs >= 1_000) return `${sign}${(abs / 1_000).toLocaleString(undefined, opts)}K NESO`;
+  return `${sign}${abs.toLocaleString(undefined, opts)} NESO`;
+}
+
+// totalClaimNesoAmount is stored on-chain style with 18 decimals (like
+// wei). This strips those decimals and formats the result with formatNesoAmount.
+function formatClaimNeso(rawBigInt) {
+  if (rawBigInt == null) return "—";
+  return formatNesoAmount(Number(rawBigInt) / 1e18);
+}
+
+// Minted (claimed) NESO between two weekly snapshots: each wallet's
+// totalClaimNesoAmount is a running cumulative total, so the delta between
+// this week's and last week's value (matched by address) is what was
+// minted that week. New wallets count their full current total; wallets
+// that dropped off the list contribute nothing. Returns null if there's no
+// previous-week record to compare against.
+function computeWeeklyMinted(currentRecord, previousRecord) {
+  if (!currentRecord || !previousRecord) return null;
+
+  const prevMap = new Map();
+  for (const r of (previousRecord.results || [])) {
+    if (r && r.address && r.totalClaimNesoAmount) {
+      try { prevMap.set(r.address, BigInt(r.totalClaimNesoAmount)); } catch {}
+    }
+  }
+
+  const byTier = { Black: 0n, Diamond: 0n, Gold: 0n, Silver: 0n, Bronze: 0n, Inactive: 0n };
+  const byAddress = new Map();
+  let total = 0n;
+  for (const r of (currentRecord.results || [])) {
+    if (!r || !r.address || !r.totalClaimNesoAmount) continue;
+    let cur;
+    try { cur = BigInt(r.totalClaimNesoAmount); } catch { continue; }
+    const prev = prevMap.get(r.address) || 0n;
+    const delta = cur - prev;
+    byAddress.set(r.address, delta);
+    total += delta;
+    if (r.rank && byTier[r.rank] != null) byTier[r.rank] += delta;
+  }
+
+  // Same Top 10 Leviathans definition used elsewhere: top 10 wallets by
+  // this week's spendNeso, summed by their minted delta.
+  const top10 = (currentRecord.results || [])
+    .filter(r => r.spendNeso != null)
+    .slice()
+    .sort((a, b) => Number(BigInt(b.spendNeso) - BigInt(a.spendNeso)))
+    .slice(0, 10)
+    .reduce((sum, r) => sum + (byAddress.get(r.address) || 0n), 0n);
+
+  return { total, byTier, top10, byAddress };
 }
 
 function charPageUrl(characterAssetKey) {
@@ -416,6 +485,12 @@ let cachedCycleDate = null;
 let activeTierFilter = "Black";
 let activeSpendingSearch = "";
 
+// address -> BigInt weekly-minted delta (this week's totalClaimNesoAmount
+// minus last week's, matched by wallet). Populated once in main() and
+// shared by the Spending Ranking table and the Weekly Minted tab.
+let cachedMintedByAddress = new Map();
+let cachedHasPrevWeekData = false;
+
 const TIER_FILTER_OPTIONS = ["Black", "Diamond", "Gold", "Silver", "Bronze", "Inactive", "All"];
 
 function renderTierFilterBar() {
@@ -477,6 +552,10 @@ function renderSpendingTable() {
     const expiryDate = topUp ? computeExpiryDate(cachedCycleDate, topUp.weekIndex) : null;
     const hasDetails = r.maintenancePlan || r.spendBuckets;
 
+    const weeklyMinted = cachedHasPrevWeekData
+      ? formatClaimNeso(cachedMintedByAddress.get(r.address) ?? 0n)
+      : "—";
+
     return `
       <tr>
         <td>${i + 1}</td>
@@ -485,6 +564,7 @@ function renderSpendingTable() {
         <td>${combatPower}</td>
         <td><span class="rank-pill rank-${r.rank}">${r.rank}</span></td>
         <td>${formatNeso(r.spendNeso)}</td>
+        <td>${weeklyMinted}</td>
         <td>${fmtExpiryDate(expiryDate)}</td>
         <td>${topUp ? formatNeso(topUp.nesoNeeded) : "—"}</td>
         <td>${hasDetails ? `<button class="view-details-btn" onclick="showWalletDetails('${r.address}')">View details</button>` : `<span class="char-extra">No data</span>`}</td>
@@ -495,7 +575,7 @@ function renderSpendingTable() {
   document.getElementById("spendingTableWrap").innerHTML = `
     <table>
       <thead>
-        <tr><th>#</th><th>Character</th><th>Address</th><th>Combat Power</th><th>Tier</th><th>Spend (last 13 weeks)</th><th>Expiry Date</th><th>Neso Needed</th><th>Details</th></tr>
+        <tr><th>#</th><th>Character</th><th>Address</th><th>Combat Power</th><th>Tier</th><th>Spend (last 13 weeks)</th><th>Weekly Minted</th><th>Expiry Date</th><th>Neso Needed</th><th>Details</th></tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>
@@ -591,6 +671,18 @@ async function main() {
     console.error("Rank chart failed:", err);
     document.getElementById("rankChart").outerHTML = `<div class="empty">Chart failed to render: ${err.message}</div>`;
   }
+
+  // ===================== SHARED: weekly minted per wallet =====================
+  // Computed once here (right after histRecords/histDates are available)
+  // so both the Spending Ranking table (Tab 2) and the Weekly Minted tab
+  // (Tab 4) can use it without redoing the BigInt work.
+  const claimDateIdx = histDates.indexOf(latest.date);
+  const prevClaimDate = claimDateIdx > 0 ? histDates[claimDateIdx - 1] : null;
+  const prevClaimRecord = claimDateIdx > 0 ? histRecords[claimDateIdx - 1] : null;
+  const weeklyMintedNow = computeWeeklyMinted(latest, prevClaimRecord);
+
+  cachedMintedByAddress = weeklyMintedNow ? weeklyMintedNow.byAddress : new Map();
+  cachedHasPrevWeekData = !!weeklyMintedNow;
 
   // ===================== TAB 2: SPENDING RANKING =====================
   const rankedResults = (latest.results || [])
@@ -731,87 +823,31 @@ async function main() {
   }
 
   // ===================== TAB 4: WEEKLY MINTED NESO =====================
-  // totalClaimNesoAmount is stored on-chain style with 18 decimals (like wei)
-  // and is a running cumulative total per wallet. Weekly minted = this
-  // week's per-wallet total minus last week's per-wallet total, matched by
-  // address (new wallets count their full current total; wallets that
-  // disappeared from this week's list drop out of the total, same as every
-  // other tab here). Reuses histRecords/histDates already fetched for Tab 1,
-  // so this needs no extra network requests.
-
-  // Removes the 18 decimals (divides by 10^18) and formats the result as a
-  // human-readable NESO amount, e.g. 60453200941757916000n -> "60,453,200,941.7579"
-  function formatTokenAmount(rawBigInt, decimals = 18, maxFractionDigits = 4) {
-    const negative = rawBigInt < 0n;
-    const abs = negative ? -rawBigInt : rawBigInt;
-    const divisor = 10n ** BigInt(decimals);
-    const whole = abs / divisor;
-    const remainder = abs % divisor;
-    const fracFull = remainder.toString().padStart(decimals, "0");
-    const fracTrimmed = fracFull.slice(0, maxFractionDigits).replace(/0+$/, "");
-    const str = fracTrimmed ? `${whole.toLocaleString()}.${fracTrimmed}` : whole.toLocaleString();
-    return negative ? `-${str}` : str;
-  }
-
-  const claimDateIdx = histDates.indexOf(latest.date);
-  const prevClaimDate = claimDateIdx > 0 ? histDates[claimDateIdx - 1] : null;
-  const prevClaimRecord = claimDateIdx > 0 ? histRecords[claimDateIdx - 1] : null;
-
-  if (prevClaimRecord) {
-    const prevClaimMap = new Map();
-    for (const r of (prevClaimRecord.results || [])) {
-      if (r && r.address && r.totalClaimNesoAmount) {
-        try { prevClaimMap.set(r.address, BigInt(r.totalClaimNesoAmount)); } catch {}
-      }
-    }
-
-    // Per-wallet delta, bucketed by this week's rank so the tier cards sum
-    // exactly to the headline total.
-    const tierMintedTotals = { Black: 0n, Diamond: 0n, Gold: 0n, Silver: 0n, Bronze: 0n, Inactive: 0n };
-    const mintedByAddress = new Map();
-    let totalMintedRaw = 0n;
-    for (const r of (latest.results || [])) {
-      if (!r || !r.address || !r.totalClaimNesoAmount) continue;
-      let cur;
-      try { cur = BigInt(r.totalClaimNesoAmount); } catch { continue; }
-      const prev = prevClaimMap.get(r.address) || 0n;
-      const delta = cur - prev;
-      mintedByAddress.set(r.address, delta);
-      totalMintedRaw += delta;
-      if (r.rank && tierMintedTotals[r.rank] != null) tierMintedTotals[r.rank] += delta;
-    }
-
-    // Same Top 10 Leviathans (top 10 by spendNeso) used in the Total Spending tab
-    const top10Addresses = (latest.results || [])
-      .filter(r => r.spendNeso != null)
-      .slice()
-      .sort((a, b) => Number(BigInt(b.spendNeso) - BigInt(a.spendNeso)))
-      .slice(0, 10);
-    let top10MintedRaw = 0n;
-    for (const r of top10Addresses) {
-      top10MintedRaw += mintedByAddress.get(r.address) || 0n;
-    }
-
+  // Reuses weeklyMintedNow computed above (shared with the Spending Ranking
+  // table) for the headline cards, then walks every consecutive pair of
+  // weeks in histRecords/histDates to build the same kind of trend chart
+  // Total Spending uses.
+  if (weeklyMintedNow) {
     document.getElementById("mintedCards").innerHTML = `
       <div class="card big">
         <div class="label">Weekly Minted NESO (${prevClaimDate} → ${latest.date})</div>
-        <div class="value">${formatTokenAmount(totalMintedRaw)}</div>
+        <div class="value">${formatClaimNeso(weeklyMintedNow.total)}</div>
       </div>
       <div class="card">
         <div class="label">Top 10 Leviathans (combined)</div>
-        <div class="value">${formatTokenAmount(top10MintedRaw)}</div>
+        <div class="value">${formatClaimNeso(weeklyMintedNow.top10)}</div>
       </div>
     `;
 
     document.getElementById("tierMintedCards").innerHTML = rankOrder.map(r => `
       <div class="card">
         <div class="label"><span class="rank-pill rank-${r}">${r}</span></div>
-        <div class="value">${formatTokenAmount(tierMintedTotals[r])}</div>
+        <div class="value">${formatClaimNeso(weeklyMintedNow.byTier[r])}</div>
       </div>
     `).join("") + `
       <div class="card">
         <div class="label">Top 10 Leviathans</div>
-        <div class="value">${formatTokenAmount(top10MintedRaw)}</div>
+        <div class="value">${formatClaimNeso(weeklyMintedNow.top10)}</div>
       </div>
     `;
   } else {
@@ -824,6 +860,81 @@ async function main() {
     `;
     document.getElementById("tierMintedCards").innerHTML =
       `<div class="empty">No prior week data available.</div>`;
+  }
+
+  // Weekly minted, tier breakdown, and Top 10 Leviathans over time — one
+  // point per week, each computed against the week immediately before it.
+  // Same histRecords/histDates already fetched for Tab 1, so no extra
+  // network requests.
+  const mintedLabels = [];
+  const mintedSeries = { Black: [], Diamond: [], Gold: [], Silver: [], Bronze: [], Inactive: [] };
+  const mintedTop10Series = [];
+  const mintedTotalSeries = [];
+  for (let i = 1; i < histRecords.length; i++) {
+    const weekly = computeWeeklyMinted(histRecords[i], histRecords[i - 1]);
+    if (!weekly) continue;
+    mintedLabels.push(histDates[i]);
+    for (const r of rankOrder) {
+      mintedSeries[r].push(Number(weekly.byTier[r]) / 1e24); // raw (18 decimals) -> millions of NESO
+    }
+    mintedTop10Series.push(Number(weekly.top10) / 1e24);
+    mintedTotalSeries.push(Number(weekly.total) / 1e24);
+  }
+
+  try {
+    if (mintedLabels.length === 0) {
+      document.getElementById("mintedChart").outerHTML =
+        `<div class="empty">Not enough weekly history yet to chart minted NESO.</div>`;
+    } else {
+      new Chart(document.getElementById("mintedChart"), {
+        type: "line",
+        data: {
+          labels: mintedLabels,
+          datasets: [
+            {
+              label: "Total minted",
+              data: mintedTotalSeries,
+              borderColor: "#22c55e",
+              backgroundColor: "rgba(34,197,94,0.12)",
+              borderWidth: 3,
+              tension: 0.25,
+              fill: true,
+            },
+            ...rankOrder.map(r => ({
+              label: r,
+              data: mintedSeries[r],
+              borderColor: rankColors[r],
+              backgroundColor: rankColors[r] + "22",
+              tension: 0.25,
+              fill: false,
+            })),
+            {
+              label: "Top 10 Leviathans",
+              data: mintedTop10Series,
+              borderColor: "#ec4899",
+              backgroundColor: "#ec489922",
+              borderDash: [6, 4],
+              tension: 0.25,
+              fill: false,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { labels: { color: "#e6e8ec" } } },
+          scales: {
+            x: { ticks: { color: "#9aa1ad" }, grid: { color: "#262a33" } },
+            y: {
+              ticks: { color: "#9aa1ad" }, grid: { color: "#262a33" },
+              title: { display: true, text: "Millions of NESO", color: "#9aa1ad" },
+            },
+          },
+        },
+      });
+    }
+  } catch (err) {
+    console.error("Minted chart failed:", err);
+    document.getElementById("mintedChart").outerHTML = `<div class="empty">Chart failed to render: ${err.message}</div>`;
   }
 }
 
