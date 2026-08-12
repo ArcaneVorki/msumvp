@@ -357,8 +357,11 @@ function formatClaimNeso(rawBigInt) {
 // Minted (claimed) NESO between two weekly snapshots: each wallet's
 // totalClaimNesoAmount is a running cumulative total, so the delta between
 // this week's and last week's value (matched by address) is what was
-// minted that week. New wallets count their full current total; wallets
-// that dropped off the list contribute nothing. Returns null if there's no
+// minted that week. Wallets with no previous-week record — new to the
+// tracked list this week — have no valid baseline to diff against, so
+// they're left out of byAddress/byTier/total entirely rather than having
+// their whole historical total counted as this week's mint. Wallets that
+// dropped off the list contribute nothing. Returns null if there's no
 // previous-week record to compare against, OR if the previous-week record
 // predates claim tracking (every wallet's totalClaimNesoAmount is 0/missing
 // there) — diffing against an uncollected baseline would count each
@@ -380,9 +383,10 @@ function computeWeeklyMinted(currentRecord, previousRecord) {
   let total = 0n;
   for (const r of (currentRecord.results || [])) {
     if (!r || !r.address || !r.totalClaimNesoAmount) continue;
+    if (!prevMap.has(r.address)) continue; // new wallet, not tracked last week — not enough data
     let cur;
     try { cur = BigInt(r.totalClaimNesoAmount); } catch { continue; }
-    const prev = prevMap.get(r.address) || 0n;
+    const prev = prevMap.get(r.address);
     const delta = cur - prev;
     byAddress.set(r.address, delta);
     total += delta;
@@ -390,7 +394,9 @@ function computeWeeklyMinted(currentRecord, previousRecord) {
   }
 
   // Same Top 10 Leviathans definition used elsewhere: top 10 wallets by
-  // this week's spendNeso, summed by their minted delta.
+  // this week's spendNeso, summed by their minted delta. Wallets without
+  // enough data to compute a delta (see above) contribute nothing here,
+  // same as wallets that dropped off the list.
   const top10 = (currentRecord.results || [])
     .filter(r => r.spendNeso != null)
     .slice()
@@ -615,8 +621,8 @@ function renderSpendingTable() {
     const expiryDate = topUp ? computeExpiryDate(cachedCycleDate, topUp.weekIndex) : null;
     const hasDetails = r.maintenancePlan || r.spendBuckets;
 
-    const weeklyMinted = cachedHasPrevWeekData
-      ? formatClaimNeso(cachedMintedByAddress.get(r.address) ?? 0n)
+    const weeklyMinted = cachedMintedByAddress.has(r.address)
+      ? formatClaimNeso(cachedMintedByAddress.get(r.address))
       : "—";
 
     return `
@@ -899,18 +905,23 @@ async function main() {
   renderSpendingTable();
 
   // ===================== TAB 5 & 6: MINTING RANKING / RATIO =====================
-  // Built from the same rankedResults + cachedMintedByAddress as above, so
-  // they only ever include wallets that already have a 13-week spend figure.
+  // Built from the same rankedResults + cachedMintedByAddress as above.
+  // cachedMintedByAddress only contains wallets with a valid week-over-week
+  // delta (see computeWeeklyMinted) — wallets new to the tracked list this
+  // week have no baseline and are filtered out here rather than shown with
+  // a misleading 0.
   cachedMintingRows = cachedHasPrevWeekData
     ? rankedResults
-        .map(r => ({ ...r, mintedRaw: cachedMintedByAddress.get(r.address) ?? 0n }))
+        .filter(r => cachedMintedByAddress.has(r.address))
+        .map(r => ({ ...r, mintedRaw: cachedMintedByAddress.get(r.address) }))
         .sort((a, b) => (b.mintedRaw > a.mintedRaw ? 1 : b.mintedRaw < a.mintedRaw ? -1 : 0))
     : [];
 
   cachedMintingRatioRows = cachedHasPrevWeekData
     ? rankedResults
+        .filter(r => cachedMintedByAddress.has(r.address))
         .map(r => {
-          const mintedRaw = cachedMintedByAddress.get(r.address) ?? 0n;
+          const mintedRaw = cachedMintedByAddress.get(r.address);
           let spendRaw = 0n;
           try { spendRaw = BigInt(r.spendNeso); } catch {}
           // mintedRaw has 18 on-chain decimals (like totalClaimNesoAmount
