@@ -339,7 +339,11 @@ function formatClaimNeso(rawBigInt) {
 // this week's and last week's value (matched by address) is what was
 // minted that week. New wallets count their full current total; wallets
 // that dropped off the list contribute nothing. Returns null if there's no
-// previous-week record to compare against.
+// previous-week record to compare against, OR if the previous-week record
+// predates claim tracking (every wallet's totalClaimNesoAmount is 0/missing
+// there) — diffing against an uncollected baseline would count each
+// wallet's entire historical total as "minted that week", wildly inflating
+// the first tracked point.
 function computeWeeklyMinted(currentRecord, previousRecord) {
   if (!currentRecord || !previousRecord) return null;
 
@@ -349,6 +353,7 @@ function computeWeeklyMinted(currentRecord, previousRecord) {
       try { prevMap.set(r.address, BigInt(r.totalClaimNesoAmount)); } catch {}
     }
   }
+  if (prevMap.size === 0) return null; // previous week has no real claim data — no valid baseline
 
   const byTier = { Black: 0n, Diamond: 0n, Gold: 0n, Silver: 0n, Bronze: 0n, Inactive: 0n };
   const byAddress = new Map();
@@ -870,11 +875,7 @@ async function main() {
   const mintedSeries = { Black: [], Diamond: [], Gold: [], Silver: [], Bronze: [], Inactive: [] };
   const mintedTop10Series = [];
   const mintedTotalSeries = [];
-  // The very first weekly delta (i = 1) is computed against histRecords[0],
-  // which predates full tracking and has little/no claim data to subtract
-  // from — so that first point is artificially inflated. Skip it here so
-  // it never enters the chart; start charting from the second delta on.
-  for (let i = 2; i < histRecords.length; i++) {
+  for (let i = 1; i < histRecords.length; i++) {
     const weekly = computeWeeklyMinted(histRecords[i], histRecords[i - 1]);
     if (!weekly) continue;
     mintedLabels.push(histDates[i]);
