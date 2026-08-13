@@ -721,9 +721,10 @@ function renderMintingRankTable() {
 }
 
 // ===================== MINTING RATIO RANKING (Tab 6) =====================
-// Ratio = this week's minted NESO / 13-week spend NESO, i.e. how much of a
-// wallet's spend it's currently "getting back" in mints, week over week.
-// Wallets with zero 13-week spend have no valid ratio and are left out of
+// Ratio = this week's minted NESO / average weekly spending (13-week spend
+// total / 13), i.e. how much of a wallet's typical week of spend it's
+// currently "getting back" in mints, week over week. Wallets with zero
+// 13-week spend have no valid ratio and are left out of
 // cachedMintingRatioRows entirely (see main()).
 function renderMintingRatioTierFilterBar() {
   document.getElementById("mintingRatioTierFilterBar").innerHTML = TIER_FILTER_OPTIONS.map(t => `
@@ -930,8 +931,8 @@ async function main() {
           // "millions" display grouping, not a unit conversion — so it's
           // used here as-is.
           const mintedNeso = Number(mintedRaw) / 1e18;
-          const spendNesoAmount = Number(spendRaw);
-          const ratio = spendNesoAmount > 0 ? mintedNeso / spendNesoAmount : null;
+          const avgWeeklySpend = Number(spendRaw) / 13;
+          const ratio = avgWeeklySpend > 0 ? mintedNeso / avgWeeklySpend : null;
           return { ...r, mintedRaw, ratio };
         })
         .filter(r => r.ratio != null)
