@@ -776,7 +776,7 @@ function renderMintingRatioTable() {
       <td class="mono">${r.address}</td>
       <td>${combatPowerFor(r.address)}</td>
       <td><span class="rank-pill rank-${r.rank}">${r.rank}</span></td>
-      <td>${(r.ratio * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%</td>
+      <td>${r.ratio.toLocaleString(undefined, { maximumFractionDigits: 2 })}x</td>
       <td>${formatClaimNeso(r.mintedRaw)}</td>
       <td>${formatNeso(Number(r.spendNeso) / 13)}</td>
     </tr>
