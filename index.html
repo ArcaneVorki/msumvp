@@ -706,14 +706,14 @@ function renderMintingRankTable() {
       <td>${combatPowerFor(r.address)}</td>
       <td><span class="rank-pill rank-${r.rank}">${r.rank}</span></td>
       <td>${formatClaimNeso(r.mintedRaw)}</td>
-      <td>${formatNeso(r.spendNeso)}</td>
+      <td>${formatNeso(Number(r.spendNeso) / 13)}</td>
     </tr>
   `).join("");
 
   document.getElementById("mintingRankTableWrap").innerHTML = `
     <table>
       <thead>
-        <tr><th>#</th><th>Character</th><th>Address</th><th>Combat Power</th><th>Tier</th><th>Weekly Minted</th><th>Spend (last 13 weeks)</th></tr>
+        <tr><th>#</th><th>Character</th><th>Address</th><th>Combat Power</th><th>Tier</th><th>Weekly Minted</th><th>Avg Weekly Spending</th></tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>
@@ -777,14 +777,14 @@ function renderMintingRatioTable() {
       <td><span class="rank-pill rank-${r.rank}">${r.rank}</span></td>
       <td>${(r.ratio * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%</td>
       <td>${formatClaimNeso(r.mintedRaw)}</td>
-      <td>${formatNeso(r.spendNeso)}</td>
+      <td>${formatNeso(Number(r.spendNeso) / 13)}</td>
     </tr>
   `).join("");
 
   document.getElementById("mintingRatioTableWrap").innerHTML = `
     <table>
       <thead>
-        <tr><th>#</th><th>Character</th><th>Address</th><th>Combat Power</th><th>Tier</th><th>Minting Ratio</th><th>Weekly Minted</th><th>Spend (last 13 weeks)</th></tr>
+        <tr><th>#</th><th>Character</th><th>Address</th><th>Combat Power</th><th>Tier</th><th>Minting Ratio</th><th>Weekly Minted</th><th>Avg Weekly Spending</th></tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>
@@ -962,6 +962,10 @@ async function main() {
     <div class="card big">
       <div class="label">Total NESO spent (last 13 weeks)</div>
       <div class="value">${formatNeso(latest.totalSpendNeso)}</div>
+    </div>
+    <div class="card">
+      <div class="label">Weekly Avg Spending</div>
+      <div class="value">${formatNeso(Number(latest.totalSpendNeso) / 13)}</div>
     </div>
     <div class="card">
       <div class="label">Raw total (NESO)</div>
