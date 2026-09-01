@@ -1,9 +1,9 @@
 {
   "cycleDate": "2026-08-31",
   "nowMs": 1788182778515,
-  "nextIndex": 2191,
+  "nextIndex": 4404,
   "totalWallets": 4404,
   "startedAt": "2026-08-31T13:26:18.515Z",
-  "completed": false,
-  "completedAt": null
+  "completed": true,
+  "completedAt": "2026-09-01T04:07:00.013Z"
 }
